@@ -5,3 +5,4 @@ A lightweight, desktop application for tracking and monitoring internet usage on
 - Built with Python and Tkinter
 - Uses secure HTTPS connections with certificate validation
 - Can be compiled into a standalone executable
+- Includes cURL executable for standalone use
