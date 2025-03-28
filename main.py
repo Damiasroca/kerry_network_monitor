@@ -4,6 +4,7 @@ import subprocess
 import json
 from datetime import datetime, timedelta
 import threading
+import sys
 import os
 import platform
 import traceback  # Added for better error handling
@@ -411,15 +412,21 @@ class StenaInternetMonitor:
             password = self.password_var.get()
         
             if not username or not password:
-                self.root.after(0, lambda: messagebox.showerror("Error", "Username and password are required"))
-                self.root.after(0, lambda: self.set_status("Error: Missing credentials", "error"))
-                self.root.after(0, lambda: self.display_error("Username and password are required"))
-                self.root.after(0, lambda: self.fetch_btn.configure(state=tk.NORMAL))
+                # Your existing code here
                 return
 
-            # Create curl command
+            # Get the path to the bundled curl executable
+            curl_executable = "curl"
+            if getattr(sys, 'frozen', False):
+                # We're running in a PyInstaller bundle
+                if platform.system() == 'Windows':
+                    curl_executable = resource_path(os.path.join("bin", "curl.exe"))
+                else:
+                    curl_executable = resource_path(os.path.join("bin", "curl"))
+
+            # Create curl command with the executable path
             curl_command = [
-                "curl", 
+                curl_executable,  # Use the bundled curl or system curl
                 "-k",   # Skip certificate validation
                 "-s",   # Silent mode
                 "-X", "POST",
@@ -692,9 +699,23 @@ def center_window(window):
     y = (window.winfo_screenheight() // 2) - (height // 2)
     window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
 
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and for PyInstaller"""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.abspath(".")
+    
+    return os.path.join(base_path, relative_path)
+
 if __name__ == "__main__":
     root = tk.Tk()
-    root.iconbitmap("icon.ico")
+    try:
+        icon_path = resource_path("icon.ico")
+        root.iconbitmap(icon_path)
+    except Exception as e:
+        print(f"Could not load icon: {e}")
     app = StenaInternetMonitor(root)
     center_window(root)
     root.mainloop()
