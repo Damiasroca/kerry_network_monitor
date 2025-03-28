@@ -412,7 +412,9 @@ class StenaInternetMonitor:
             password = self.password_var.get()
         
             if not username or not password:
-                # Your existing code here
+                self.root.after(0, lambda: messagebox.showerror("Error", "Username and password are required"))
+                self.root.after(0, lambda: self.set_status("Error: Missing credentials", "error"))
+                self.root.after(0, lambda: self.fetch_btn.configure(state=tk.NORMAL))
                 return
 
             # Get the path to the bundled curl executable
