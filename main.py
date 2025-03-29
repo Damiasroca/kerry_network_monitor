@@ -420,7 +420,7 @@ class StenaInternetMonitor:
             # Get the path to the bundled curl executable
             curl_executable = "curl"
             if getattr(sys, 'frozen', False):
-                # We're running in a PyInstaller bundle
+
                 if platform.system() == 'Windows':
                     curl_executable = resource_path(os.path.join("bin", "curl.exe"))
                 else:
@@ -446,7 +446,7 @@ class StenaInternetMonitor:
                         curl_command, 
                         capture_output=True, 
                         text=True,
-                        creationflags=CREATE_NO_WINDOW  # This prevents the console window from appearing
+                        creationflags=CREATE_NO_WINDOW 
                     )
                 except FileNotFoundError:
                     # Handle the case where curl is not installed
@@ -483,6 +483,10 @@ class StenaInternetMonitor:
                         self.root.after(0, lambda: self.clear_output())
                         self.root.after(0, lambda: self.display_error(f"API Error: {error_msg}", json.dumps(data, indent=2)))
                         self.root.after(0, lambda: self.set_status("Error: API returned an error", "error"))
+                    elif "error" in data and data["error"].get("code") == "error_logon_volume-quota-reached-detail":
+                        self.current_data = data
+                        self.root.after(0, lambda: self.display_quota_reached_info(data))
+                        self.root.after(0, lambda: self.set_status("Quota limit reached", "warning"))
                     else:
                         error_msg = "Authentication failed or no data returned"
                         self.root.after(0, lambda: self.clear_output())
@@ -523,6 +527,124 @@ class StenaInternetMonitor:
             # Handle type conversion errors
             self.display_error(f"Error formatting bytes: {e}", f"Value was: {bytes_value}")
             return "Error"
+    
+    def display_quota_reached_info(self, data):
+        try:
+            # Clear previous output
+            self.clear_output()
+            
+            # Configure text tags for colorful display if not already configured
+            self.output_text.tag_configure("header", foreground=COLORS["primary"], font=("Segoe UI", 12, "bold"))
+            self.output_text.tag_configure("section", foreground=COLORS["secondary"], font=("Segoe UI", 10, "bold"))
+            self.output_text.tag_configure("label", foreground=COLORS["light_text"], font=("Segoe UI", 9))
+            self.output_text.tag_configure("value", foreground=COLORS["text"], font=("Segoe UI", 10, "bold"))
+            self.output_text.tag_configure("warning", foreground=COLORS["warning"], font=("Segoe UI", 10, "bold"))
+            self.output_text.tag_configure("alert", foreground=COLORS["error"], font=("Segoe UI", 11, "bold"))
+            self.output_text.tag_configure("normal", foreground=COLORS["text"], font=("Segoe UI", 10))
+            self.output_text.tag_configure("footer", foreground=COLORS["light_text"], font=("Segoe UI", 8, "italic"))
+            self.output_text.tag_configure("debug", foreground=COLORS["light_text"], font=("Consolas", 9))
+            
+            # Extract error data
+            error_value = data.get("error", {}).get("value", {})
+            
+            if not error_value:
+                self.display_error("Missing quota details in API response", json.dumps(data, indent=2))
+                return
+            
+            try:
+                consumed_up = int(error_value.get("consumedUp", 0))
+                consumed_down = int(error_value.get("consumedDown", 0))
+                threshold_up = int(error_value.get("thresoldUp", 0))
+                
+                # Handle negative threshold values
+                threshold_down_raw = int(error_value.get("thresoldDown", 0))
+                threshold_down = abs(threshold_down_raw) if threshold_down_raw < 0 else threshold_down_raw
+                
+                renew_timestamp = int(error_value.get("renewTimeStamp", 0))
+                
+                # Calculate total consumption
+                total_consumed = consumed_up + consumed_down
+                total_consumed_mb = total_consumed / (1024 * 1024)
+                threshold_up_mb = threshold_up / (1024 * 1024)
+            except (ValueError, TypeError) as e:
+                # Handle conversion errors
+                self.display_error(f"Invalid data format in quota-reached response: {e}", 
+                                f"Data received: {json.dumps(error_value, indent=2)}")
+                return
+            
+            # Calculate time remaining
+            current_time = datetime.now().timestamp()
+            time_remaining_seconds = renew_timestamp - current_time
+            time_remaining = timedelta(seconds=max(0, time_remaining_seconds))
+            
+            # Display information with formatting
+            self.output_text.insert(tk.END, "QUOTA LIMIT REACHED\n\n", "alert")
+            
+            # Display quota alert message
+            self.output_text.insert(tk.END, "Your internet quota has been reached. You will have limited or no internet access until the renewal time.\n\n", "warning")
+            
+            # Data usage section
+            self.output_text.insert(tk.END, "DATA USAGE\n", "section")
+            
+            self.output_text.insert(tk.END, "Download: ", "label")
+            self.output_text.insert(tk.END, f"{self.format_bytes(consumed_down)}\n", "value")
+            
+            self.output_text.insert(tk.END, "Upload: ", "label")
+            self.output_text.insert(tk.END, f"{self.format_bytes(consumed_up)}\n", "value")
+            
+            self.output_text.insert(tk.END, "Total Usage: ", "label")
+            self.output_text.insert(tk.END, f"{self.format_bytes(consumed_up + consumed_down)}\n\n", "value")
+            
+            # Quota information section
+            self.output_text.insert(tk.END, "QUOTA INFORMATION\n", "section")
+        
+            if total_consumed > threshold_up and threshold_up > 0:
+                self.output_text.insert(tk.END, "Total Data Limit: ", "label")
+                self.output_text.insert(tk.END, f"{self.format_bytes(threshold_up)}\n", "value")
+                
+                usage_percentage = (total_consumed / threshold_up) * 100
+                self.output_text.insert(tk.END, "Total Usage: ", "label")
+                self.output_text.insert(tk.END, f"{usage_percentage:.1f}% ", "warning")
+                
+                # Calculate actual overage
+                excess_mb = total_consumed_mb - threshold_up_mb
+                if excess_mb > 0:
+                    self.output_text.insert(tk.END, f"(Exceeded by {excess_mb:.1f} MB)\n", "warning")
+                else:
+                    self.output_text.insert(tk.END, "(Limit reached)\n", "warning")
+            else:
+
+                if threshold_up > 0:
+                    self.output_text.insert(tk.END, "Upload Limit: ", "label")
+                    self.output_text.insert(tk.END, f"{self.format_bytes(threshold_up)}\n", "value")
+                    
+                    upload_percentage = (consumed_up / threshold_up) * 100
+                    self.output_text.insert(tk.END, "Upload Usage: ", "label")
+                    self.output_text.insert(tk.END, f"{upload_percentage:.1f}% (Limit reached)\n", "warning")
+            
+            # Time information
+            self.output_text.insert(tk.END, "\nTIME INFORMATION\n", "section")
+            
+            self.output_text.insert(tk.END, "Time until renewal: ", "label")
+            self.output_text.insert(tk.END, f"{time_remaining.days} days, {time_remaining.seconds // 3600} hours, {(time_remaining.seconds % 3600) // 60} minutes\n", "value")
+            
+            renewal_time = datetime.fromtimestamp(renew_timestamp)
+            self.output_text.insert(tk.END, "Renewal date: ", "label")
+            self.output_text.insert(tk.END, f"{renewal_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n", "value")
+            
+            # Footer
+            self.output_text.insert(tk.END, f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n", "footer")
+            
+            # Scroll to the top to see all information
+            self.output_text.see(1.0)
+            
+        except Exception as e:
+            # Get the full traceback for detailed error information
+            error_traceback = traceback.format_exc()
+            self.display_error(
+                f"Error processing quota-reached data: {e}", 
+                f"Traceback:\n{error_traceback}\n\nData received:\n{json.dumps(data, indent=2)[:500]}...(truncated)"
+            )
     
     def display_info(self, data):
         if not data:
@@ -664,13 +786,23 @@ class StenaInternetMonitor:
             return
         
         try:
-            # Extract relevant data
-            consumed = self.current_data.get("user", {}).get("consumedData", {})
-            download_bytes = int(consumed.get("download", {}).get("value", 0))
-            upload_bytes = int(consumed.get("upload", {}).get("value", 0))
-            
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             username = self.username_var.get()
+            
+            # Extract data based on response type
+            if "user" in self.current_data and "consumedData" in self.current_data["user"]:
+                # Normal response
+                consumed = self.current_data.get("user", {}).get("consumedData", {})
+                download_bytes = int(consumed.get("download", {}).get("value", 0))
+                upload_bytes = int(consumed.get("upload", {}).get("value", 0))
+            elif "error" in self.current_data and self.current_data["error"].get("code") == "error_logon_volume-quota-reached-detail":
+                # Quota-reached response
+                error_value = self.current_data.get("error", {}).get("value", {})
+                download_bytes = int(error_value.get("consumedDown", 0))
+                upload_bytes = int(error_value.get("consumedUp", 0))
+            else:
+                messagebox.showerror("Error", "Unrecognized data format. Cannot save history.")
+                return
             
             # Check if file exists
             file_exists = os.path.isfile('usage_history.csv')
@@ -678,10 +810,11 @@ class StenaInternetMonitor:
             with open('usage_history.csv', 'a') as f:
                 # Write header if file doesn't exist
                 if not file_exists:
-                    f.write("Timestamp,Username,Download (MB),Upload (MB),Total (MB)\n")
+                    f.write("Timestamp,Username,Download (MB),Upload (MB),Total (MB),Status\n")
                 
-                # Write data
-                f.write(f"{timestamp},{username},{download_bytes/1024/1024:.2f},{upload_bytes/1024/1024:.2f},{(download_bytes+upload_bytes)/1024/1024:.2f}\n")
+                # Write data with status
+                status = "Quota Reached" if "error" in self.current_data else "Active"
+                f.write(f"{timestamp},{username},{download_bytes/1024/1024:.2f},{upload_bytes/1024/1024:.2f},{(download_bytes+upload_bytes)/1024/1024:.2f},{status}\n")
             
             self.set_status("Usage data saved to usage_history.csv", "success")
             messagebox.showinfo("Success", "Usage data saved to usage_history.csv")
